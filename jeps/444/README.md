@@ -1,6 +1,9 @@
 ---
 title: "JEP 444: Virtual Threads"
 ---
+
+- [openjdk.org > jeps > 444](https://openjdk.org/jeps/444)
+
 ## Summaray
 
 `Java Platform` 에 *virtual threads* 를 도입한다. Virtual threads 는 높은 처리량을 가진 동시성 애플리케이션의 작성, 유지보수, 운영 비용을 극적으로 낮춘다.
@@ -55,3 +58,36 @@ virtual thread 를 사용하면 애플리케이션 코드는 thread-per-request 
 virtual thread 는 값싸고 아주 풍족합니다. 따라서 절때 이를 pool 하지 마세요. 새로운 virtual thread 는 모든 application task 에 생성 되어야 합니다. 대부분의 virtual thread 는 짧게 유지되어야 하며 앝은 call stack 을 가져야 합니다. platform thread 는 반면에 무겁고 비쌉니다. 따라서 항상 pooled 되곤 합니다. 이들은 보통 오래 유지되며 깊은 call stack 을 가지고 많은 task 간 공유되곤 합니다.
 
 요약하자면, virtual thread 는 Java Platform 에 조화로운 안정적인 thread-per-request style 을 유지하면서, hardware 자원을 최대한 많이 활용할 수 있도록 합니다. virtual thread 를 활용하기 위해 새로운 개념을 학습해야하지 않습니다. 하지만 전통적인 thread 를 중요하고 무겁게 다루던 습관을 덜어내는 것을 필요로 할 수는 있습니다. 
+
+## Description
+
+오늘날, 모든 `java.lang.Thread` 의 구현체는 *`platform thread`* 입니다. platform thread 는 Java code 를 OS thread 의 아래에서 실행하며 코드 전체 생명주기 동안 OS thread 를 capture 합니다. 전체 platform thread 의 개수는 OS thread 의 개수에 제한되어 있습니다.
+
+*`virtual thread`* 는 OS thread 의 아래에서 실행되지만 코드 전체 생명주기 동안 OS thread 를 capture 하지 않습니다. 이것은, 많은 virtual threads 가 자신의 Java code 를 동일한 OS thread 에서 효율적으로, 공유하며 실행할 수 있다는 것을 의미합니다. 반면 platform thread 는 귀중한 OS, thread 를 독점합니다. virtual thread 의 개수는 OS thread 의 개수보다 훨씬 많아질 수 있습니다.
+
+`virtual thread` 는 OS 가아닌 JDK 가 제공하는 경량 스레드입니다. 이러한 `user-mode thread` 방식은 다른 멀티스레드 언어 (e.g., goroutines in Go, koroutines in Kotlin) 에서 이미 성공적으로 활용 중입니다. 초기 Java 에서 User-mode thread 는 *`green thread`* 라고도 불렸습니다. 반면, Java 의 green thread 에서는 여러 스레드가 하나의 OS thread 를 공유하는 방식을 활용했습니다. (M:1 scheduling) 이 방식은 Thread 를 OS-Thread 에 1:1 로 scheduling 하는 platform-thread 방식에 완전히 대체되었습니다. virtual thread 는 M:N scheduling 을 제공합니다.
+
+### Using virtual threads vs. platform threads
+
+개발자는 virtual thread/ platform thread 사용을 선택할 수 있습니다. 아래 코드는 많은 수의 virtual threads 를 생성하는 코드입니다. 이 프로그램은 주어진 task 에 대해 새로운 virtual thread 를 생성하는 ExecutorService 를 생성합니다. 그 다음 10,000 개의 작업을 수행하고 대기합니다.
+
+```java
+try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+    IntStream.range(0, 10_000).forEach(i -> {
+        executor.submit(() -> {
+            Thread.sleep(Duration.ofSeconds(1));
+            return i;
+        });
+    });
+}  // executor.close() is called implicitly, and waits
+```
+
+virtual thread 를 활용하면 위 코드는 매우 빨리 실행됩니다. `Executors.newCachedThreadPool()` 혹은 `Executors.newFixedThreadPool(200)` 를 사용한다고 이런 어마어마한 동시성을 획득할 수 없습니다.
+
+하지만 작업이 만약 단순히 1초 자는 것이 아니라 높은 cpu 사용량을 필요로 하는 경우 virtual thread/ platform thread 여부는 크게 영향을 주지 않습니다.
+
+> [!NOTE] NOTE!
+> They exist to provide scale (higher throughput), not speed (lower latency)
+
+Virtual thread 는 platform thread 가 실행할 수 있는 모든 코드를 실행 할 수 있습니다. 특히, virtual thread 는 thread-local 변수를 지원합니다.
+
